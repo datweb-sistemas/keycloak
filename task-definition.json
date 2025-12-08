@@ -5,7 +5,6 @@
   "cpu": "1024",
   "memory": "2048",
   "executionRoleArn": "arn:aws:iam::788949391401:role/ecsTaskExecutionRole",
-  "taskRoleArn": "arn:aws:iam::788949391401:role/ecsTaskRole",
   "containerDefinitions": [
     {
       "name": "keycloak",
@@ -42,32 +41,33 @@
       "secrets": [
         {
           "name": "KC_DB_URL_HOST",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:keycloak/db-host"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/db-host"
         },
         {
           "name": "KC_DB_URL_DATABASE",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:keycloak/db-name"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/db-name"
         },
         {
           "name": "KC_DB_USERNAME",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:keycloak/db-username"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/db-username"
         },
         {
           "name": "KC_DB_PASSWORD",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:keycloak/db-password"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/db-password"
         },
         {
           "name": "KEYCLOAK_ADMIN",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:keycloak/admin-username"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/admin-username"
         },
         {
           "name": "KEYCLOAK_ADMIN_PASSWORD",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:keycloak/admin-password"
+          "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/admin-password"
         }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
+          "awslogs-create-group": "true",
           "awslogs-group": "/ecs/keycloak",
           "awslogs-region": "us-east-1",
           "awslogs-stream-prefix": "ecs"
@@ -78,7 +78,7 @@
         "interval": 30,
         "timeout": 5,
         "retries": 3,
-        "startPeriod": 60
+        "startPeriod": 90
       }
     }
   ]
