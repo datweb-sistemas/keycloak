@@ -1,0 +1,51 @@
+{
+  "family": "keycloak-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::788949391401:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "keycloak",
+      "image": "ghcr.io/datweb-sistemas/keycloak:latest",
+      "repositoryCredentials": {
+        "credentialsParameter": "arn:aws:secretsmanager:us-east-1:788949391401:secret:github-token-76uO9C"
+      },
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {"name": "KC_HTTP_ENABLED", "value": "true"},
+        {"name": "KC_PROXY", "value": "edge"},
+        {"name": "KC_PROXY_HEADERS", "value": "xforwarded"},
+        {"name": "KC_HOSTNAME", "value": "oauth.datweb.com.br"},
+        {"name": "KC_HOSTNAME_STRICT", "value": "false"},
+        {"name": "KC_HOSTNAME_STRICT_HTTPS", "value": "false"},
+        {"name": "KC_DB", "value": "postgres"},
+        {"name": "KC_HEALTH_ENABLED", "value": "true"},
+        {"name": "KC_METRICS_ENABLED", "value": "true"}
+      ],
+      "secrets": [
+        {"name": "KC_DB_URL_HOST", "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/db-host-4WynyQ"},
+        {"name": "KC_DB_URL_DATABASE", "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/db-name-0seZWe"},
+        {"name": "KC_DB_USERNAME", "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/db-username-xvdJtH"},
+        {"name": "KC_DB_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/db-password-yulC6v"},
+        {"name": "KEYCLOAK_ADMIN", "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/admin-username-9hqUtU"},
+        {"name": "KEYCLOAK_ADMIN_PASSWORD", "valueFrom": "arn:aws:secretsmanager:us-east-1:788949391401:secret:keycloak/admin-password-pQvef1"}
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/keycloak",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
