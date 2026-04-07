@@ -8,7 +8,7 @@ data:
   # KC_PROXY=edge foi removido no Keycloak 24+. Usar KC_PROXY_HEADERS para indicar
   # que o proxy encaminha os headers X-Forwarded-* (modo edge/reverse proxy).
   KC_PROXY_HEADERS: xforwarded
-  KC_HOSTNAME: auth.datweb.com.br
+  KC_HOSTNAME: auth.datwebsistemas.com.br
   KC_HOSTNAME_STRICT: "true"
   KC_HTTP_ENABLED: "true"
   KC_HEALTH_ENABLED: "true"

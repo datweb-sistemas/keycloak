@@ -9,4 +9,4 @@ spec:
     name: letsencrypt-prod
     kind: ClusterIssuer
   dnsNames:
-    - auth.datweb.com.br
+    - auth.datwebsistemas.com.br

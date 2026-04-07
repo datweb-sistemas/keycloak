@@ -16,7 +16,7 @@ spec:
         # credentialName deve bater com o secretName do Certificate (certificate.yaml)
         credentialName: keycloak-tls-secret
       hosts:
-        - auth.datweb.com.br
+        - auth.datwebsistemas.com.br
     - port:
         number: 80
         name: http
@@ -26,7 +26,7 @@ spec:
       tls:
         httpsRedirect: true
       hosts:
-        - auth.datweb.com.br
+        - auth.datwebsistemas.com.br
 ---
 apiVersion: networking.istio.io/v1beta1
 kind: VirtualService
@@ -35,7 +35,7 @@ metadata:
   namespace: keycloak
 spec:
   hosts:
-    - auth.datweb.com.br
+    - auth.datwebsistemas.com.br
   gateways:
     - keycloak-gateway
   http:
