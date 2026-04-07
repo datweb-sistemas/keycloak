@@ -21,10 +21,9 @@ spec:
         number: 80
         name: http
         protocol: HTTP
-      # httpsRedirect instrui o Istio a emitir redirect 301 para HTTPS no nível do Gateway,
-      # dispensando a necessidade de uma regra separada no VirtualService.
-      tls:
-        httpsRedirect: true
+      # Sem httpsRedirect aqui para permitir que o VirtualService decida:
+      # requisições ao path /.well-known/acme-challenge/ vão para o solver do cert-manager,
+      # todas as demais recebem redirect 301 para HTTPS.
       hosts:
         - auth.datwebsistemas.com.br
 ---
@@ -39,7 +38,22 @@ spec:
   gateways:
     - keycloak-gateway
   http:
-    # Rota única para HTTPS: encaminha para o Service keycloak na porta 80
+    # Regra 1: ACME HTTP-01 challenge — roteia para o solver do cert-manager sem redirect
+    - match:
+        - uri:
+            prefix: "/.well-known/acme-challenge/"
+      route:
+        - destination:
+            host: cm-acme-http-solver-tzg9n
+            port:
+              number: 8089
+    # Regra 2: todo o tráfego HTTP restante recebe redirect 301 para HTTPS
+    - match:
+        - port: 80
+      redirect:
+        scheme: https
+        redirectCode: 301
+    # Regra 3: tráfego HTTPS encaminhado para o Service keycloak
     # (Service.spec.ports[].port=80 -> targetPort=8080 no Pod).
     - route:
         - destination:
