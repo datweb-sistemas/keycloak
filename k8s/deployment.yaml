@@ -36,9 +36,11 @@ spec:
           image: ghcr.io/datweb-sistemas/keycloak:latest
           imagePullPolicy: Always
           # O ENTRYPOINT da imagem já executa "kc.sh start".
-          # Não passamos "--optimized" para que o Keycloak execute kc.sh build
-          # em runtime com as env vars do ConfigMap/Secret, garantindo consistência
-          # entre as opções de build e execução (evita erro "build time options differ").
+          # "--optimized" instrui o Keycloak a usar a imagem já construída, evitando
+          # o Quarkus augmentation (rebuild de ~17s) a cada reinicialização.
+          # A imagem GHCR já é buildada com as opções corretas via CI (kc.sh build).
+          args:
+            - "--optimized"
           ports:
             - name: http
               containerPort: 8080
@@ -61,29 +63,30 @@ spec:
               cpu: "2"
               memory: 2Gi
           # Keycloak 26+ expõe /health/* e /metrics na porta de management (9000).
-          # startupProbe: janela máxima = periodSeconds(10) * failureThreshold(30) = 300s
+          # startupProbe: janela máxima = periodSeconds(10) * failureThreshold(60) = 600s (10 min)
+          # Garante tempo suficiente mesmo se o augmentation ocorrer (fallback sem --optimized).
           startupProbe:
             httpGet:
               path: /health/live
               port: 9000
             initialDelaySeconds: 30
             periodSeconds: 10
-            failureThreshold: 30
+            failureThreshold: 60
             timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health/live
               port: 9000
             periodSeconds: 30
-            failureThreshold: 3
-            timeoutSeconds: 5
+            failureThreshold: 5
+            timeoutSeconds: 10
           readinessProbe:
             httpGet:
               path: /health/ready
               port: 9000
-            periodSeconds: 10
+            periodSeconds: 15
             failureThreshold: 3
-            timeoutSeconds: 5
+            timeoutSeconds: 10
           volumeMounts:
             - name: keycloak-data
               mountPath: /opt/keycloak/data

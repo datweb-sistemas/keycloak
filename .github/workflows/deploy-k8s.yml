@@ -8,6 +8,7 @@ on:
     paths:
       - 'k8s/**'
       - 'themes/**'
+      - 'Dockerfile'
 
 env:
   IMAGE: ghcr.io/datweb-sistemas/keycloak:latest
