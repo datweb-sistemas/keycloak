@@ -6,8 +6,16 @@
 # O sidecar do Keycloak só vê o IP do pod IngressGateway (10.244.0.0/16) como source.ipBlocks.
 # Para filtrar IPs externos reais, usa-se source.remoteIpBlocks (X-Forwarded-For) no IngressGateway.
 #
+# NOTA (DO-158): A policy keycloak-admin-ip-allowlist (abaixo) com remoteIpBlocks NÃO estava
+# sendo enforced porque o MeshConfig não tem numTrustedProxies configurado (padrão = 0).
+# Sem numTrustedProxies >= 1, o Envoy não lê o header X-Forwarded-For para source.remoteIpBlocks,
+# tornando a policy ineficaz para inspecionar o IP real do cliente externo.
+#
+# CORREÇÃO: ver k8s/envoyfilter-admin-ip.yaml — EnvoyFilter RBAC direto no IngressGateway
+# usando remote_ip (IP da conexão TCP real), que é imune a manipulação de headers XFF.
+#
 # Duas policies são necessárias:
-#   1. keycloak-admin-ip-allowlist (istio-system) — filtra IPs externos no IngressGateway via remoteIpBlocks
+#   1. keycloak-admin-ip-allowlist (istio-system) — INEFICAZ sem numTrustedProxies; substituída pelo EnvoyFilter
 #   2. keycloak-admin-deny-non-corporate (keycloak)  — mantém restrição de rede interna no sidecar
 
 ---
