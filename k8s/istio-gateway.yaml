@@ -1,0 +1,48 @@
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: keycloak-gateway
+  namespace: keycloak
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        credentialName: keycloak-tls-secret
+      hosts:
+        - auth.datweb.com.br
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - auth.datweb.com.br
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: keycloak-vs
+  namespace: keycloak
+spec:
+  hosts:
+    - auth.datweb.com.br
+  gateways:
+    - keycloak-gateway
+  http:
+    - match:
+        - port: 80
+      redirect:
+        scheme: https
+        redirectCode: 301
+    - match:
+        - port: 443
+      route:
+        - destination:
+            host: keycloak
+            port:
+              number: 80

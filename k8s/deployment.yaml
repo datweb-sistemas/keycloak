@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+      annotations:
+        sidecar.istio.io/inject: "true"
+    spec:
+      # Para criar o imagePullSecret para o GHCR, execute:
+      # kubectl create secret docker-registry ghcr-secret \
+      #   --docker-server=ghcr.io \
+      #   --docker-username=<seu-usuario-github> \
+      #   --docker-password=<seu-token-ghcr> \
+      #   --docker-email=<seu-email> \
+      #   -n keycloak
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: keycloak
+          image: ghcr.io/datweb-sistemas/keycloak:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: keycloak-config
+            - secretRef:
+                name: keycloak-secrets
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          volumeMounts:
+            - name: keycloak-data
+              mountPath: /opt/keycloak/data
+            # TODO (DO-160): O tema promobank deve ser montado neste path.
+            # Opções:
+            #   1. Build o tema na imagem Docker (recomendado para produção).
+            #   2. Criar um ConfigMap com os arquivos do tema e montar aqui.
+            #   3. Usar um initContainer para copiar o tema de um volume compartilhado.
+            # Descomente e ajuste conforme a abordagem escolhida:
+            # - name: promobank-theme
+            #   mountPath: /opt/keycloak/themes/promobank
+      volumes:
+        - name: keycloak-data
+          persistentVolumeClaim:
+            claimName: keycloak-data
+        # Descomente para montar o tema via volume (ajuste conforme abordagem acima):
+        # - name: promobank-theme
+        #   configMap:
+        #     name: promobank-theme-configmap

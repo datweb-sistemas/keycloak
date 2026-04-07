@@ -1,0 +1,56 @@
+# ATENÇÃO: Antes do deploy em produção, adicione os CIDRs corporativos permitidos
+# na AuthorizationPolicy abaixo (keycloak-admin-ip-allowlist).
+# Substitua os placeholders "CORPORATE_CIDR_1" e "CORPORATE_CIDR_2" pelos blocos
+# de IP reais da sua rede corporativa (ex: "10.0.0.0/8", "192.168.1.0/24").
+#
+# Abordagem utilizada:
+#   1. Policy ALLOW: libera acesso ao admin console apenas para os IPs permitidos.
+#   2. Policy DENY: nega acesso ao admin console para todos os outros IPs.
+# O Istio avalia DENY antes de ALLOW, portanto a policy de DENY garante que
+# qualquer IP não listado no ALLOW será bloqueado nos paths de admin.
+
+---
+# Policy 1: ALLOW — libera acesso ao admin console apenas para IPs corporativos
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: keycloak-admin-ip-allowlist
+  namespace: keycloak
+spec:
+  selector:
+    matchLabels:
+      app: keycloak
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            # Adicione aqui os CIDRs corporativos autorizados a acessar o admin console.
+            # Exemplos: "10.0.0.0/8", "192.168.1.0/24", "203.0.113.0/28"
+            ipBlocks:
+              - "CORPORATE_CIDR_1"   # TODO: substituir pelo CIDR corporativo real
+              - "CORPORATE_CIDR_2"   # TODO: adicionar CIDRs adicionais conforme necessário
+      to:
+        - operation:
+            paths:
+              - "/auth/admin/*"
+              - "/admin/*"
+---
+# Policy 2: DENY — bloqueia acesso ao admin console para todos os outros IPs
+# Esta policy é avaliada antes da ALLOW, garantindo que apenas os IPs
+# explicitamente listados acima possam acessar os paths de administração.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: keycloak-admin-deny-all
+  namespace: keycloak
+spec:
+  selector:
+    matchLabels:
+      app: keycloak
+  action: DENY
+  rules:
+    - to:
+        - operation:
+            paths:
+              - "/auth/admin/*"
+              - "/admin/*"
