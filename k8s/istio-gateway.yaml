@@ -13,7 +13,17 @@ spec:
         protocol: HTTPS
       tls:
         mode: SIMPLE
-        # credentialName deve bater com o secretName do Certificate (certificate.yaml)
+        # credentialName deve bater com o secretName do Certificate (certificate.yaml).
+        # IMPORTANTE: o Istio IngressGateway busca este secret no namespace istio-system,
+        # não no namespace keycloak. O secret deve existir em ambos os namespaces.
+        # Para copiar o secret para istio-system após emissão pelo cert-manager, execute:
+        #   kubectl get secret keycloak-tls-secret -n keycloak -o yaml | \
+        #     python3 -c "
+        #   import sys, yaml
+        #   d = yaml.safe_load(sys.stdin)
+        #   d['metadata'] = {'name': 'keycloak-tls-secret', 'namespace': 'istio-system'}
+        #   print(yaml.dump(d))
+        #   " | kubectl apply -f -
         credentialName: keycloak-tls-secret
       hosts:
         - auth.datwebsistemas.com.br
@@ -21,9 +31,6 @@ spec:
         number: 80
         name: http
         protocol: HTTP
-      # Sem httpsRedirect aqui para permitir que o VirtualService decida:
-      # requisições ao path /.well-known/acme-challenge/ vão para o solver do cert-manager,
-      # todas as demais recebem redirect 301 para HTTPS.
       hosts:
         - auth.datwebsistemas.com.br
 ---
@@ -38,22 +45,15 @@ spec:
   gateways:
     - keycloak-gateway
   http:
-    # Regra 1: ACME HTTP-01 challenge — roteia para o solver do cert-manager sem redirect
-    - match:
-        - uri:
-            prefix: "/.well-known/acme-challenge/"
-      route:
-        - destination:
-            host: cm-acme-http-solver-tzg9n
-            port:
-              number: 8089
-    # Regra 2: todo o tráfego HTTP restante recebe redirect 301 para HTTPS
+    # Regra 1: todo o tráfego HTTP recebe redirect 301 para HTTPS
+    # O cert-manager (HTTP-01 via ingress.class=istio) cria Ingress temporário
+    # automaticamente para o desafio ACME durante renovação do certificado.
     - match:
         - port: 80
       redirect:
         scheme: https
         redirectCode: 301
-    # Regra 3: tráfego HTTPS encaminhado para o Service keycloak
+    # Regra 2: tráfego HTTPS encaminhado para o Service keycloak
     # (Service.spec.ports[].port=80 -> targetPort=8080 no Pod).
     - route:
         - destination:
