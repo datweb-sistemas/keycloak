@@ -7,6 +7,11 @@ metadata:
     app: keycloak
 spec:
   replicas: 1
+  # Recreate é necessário porque o PVC keycloak-data usa ReadWriteOnce (RWO),
+  # que não permite montagem simultânea em múltiplos pods/nós.
+  # Com RollingUpdate, o pod antigo não libera o PVC antes do novo tentar montar.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: keycloak
@@ -30,11 +35,18 @@ spec:
         - name: keycloak
           image: ghcr.io/datweb-sistemas/keycloak:latest
           imagePullPolicy: Always
-          # Keycloak 17+ requer o subcomando "start" para iniciar em modo produção.
-          args: ["start"]
+          # O ENTRYPOINT da imagem já executa "kc.sh start".
+          # Não passamos "--optimized" para que o Keycloak execute kc.sh build
+          # em runtime com as env vars do ConfigMap/Secret, garantindo consistência
+          # entre as opções de build e execução (evita erro "build time options differ").
           ports:
             - name: http
               containerPort: 8080
+              protocol: TCP
+            # Keycloak 26+ expõe /health e /metrics na porta de management (9000),
+            # separada da porta de aplicação (8080).
+            - name: management
+              containerPort: 9000
               protocol: TCP
           envFrom:
             - configMapRef:
@@ -48,13 +60,12 @@ spec:
             limits:
               cpu: "2"
               memory: 2Gi
-          # startupProbe garante que o Keycloak (startup lento ~60-120s) tenha
-          # tempo suficiente para iniciar antes que liveness/readiness entrem em ação.
-          # Janela máxima: periodSeconds(10) * failureThreshold(30) = 300s
+          # Keycloak 26+ expõe /health/* e /metrics na porta de management (9000).
+          # startupProbe: janela máxima = periodSeconds(10) * failureThreshold(30) = 300s
           startupProbe:
             httpGet:
               path: /health/live
-              port: 8080
+              port: 9000
             initialDelaySeconds: 30
             periodSeconds: 10
             failureThreshold: 30
@@ -62,14 +73,14 @@ spec:
           livenessProbe:
             httpGet:
               path: /health/live
-              port: 8080
+              port: 9000
             periodSeconds: 30
             failureThreshold: 3
             timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health/ready
-              port: 8080
+              port: 9000
             periodSeconds: 10
             failureThreshold: 3
             timeoutSeconds: 5
