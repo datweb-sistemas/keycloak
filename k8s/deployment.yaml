@@ -31,16 +31,32 @@ spec:
       #   -n keycloak
       imagePullSecrets:
         - name: ghcr-secret
+      # initContainer corrige ownership do volume antes do Keycloak subir.
+      # O PVC é criado com root:root (drwxr-xr-x), mas o processo roda como
+      # uid=1000 (keycloak). Sem isso, /opt/keycloak/data/tmp não pode ser
+      # criado e todos os requests de recursos estáticos retornam HTTP 500.
+      initContainers:
+        - name: fix-data-permissions
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 1000:0 /opt/keycloak/data && chmod -R 775 /opt/keycloak/data"]
+          volumeMounts:
+            - name: keycloak-data
+              mountPath: /opt/keycloak/data
+          securityContext:
+            runAsUser: 0
       containers:
         - name: keycloak
           image: ghcr.io/datweb-sistemas/keycloak:latest
           imagePullPolicy: Always
           # O ENTRYPOINT da imagem já executa "kc.sh start".
-          # "--optimized" instrui o Keycloak a usar a imagem já construída, evitando
-          # o Quarkus augmentation (rebuild de ~17s) a cada reinicialização.
-          # A imagem GHCR já é buildada com as opções corretas via CI (kc.sh build).
-          args:
-            - "--optimized"
+          # NOTA: "--optimized" foi removido temporariamente pois exige que a imagem
+          # tenha sido buildada com exatamente as mesmas opções de build-time que
+          # estão configuradas no ambiente (KC_DB, KC_HEALTH_ENABLED, KC_METRICS_ENABLED).
+          # Sem o arquivo de configuração persistido no volume, o Keycloak detecta
+          # divergência e aborta com erro. O rebuild automático (~17s) garante startup
+          # correto. Para reativar --optimized, garanta que a imagem CI foi buildada
+          # com as mesmas flags do ConfigMap.
+          args: []
           ports:
             - name: http
               containerPort: 8080
