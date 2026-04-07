@@ -4,7 +4,7 @@ metadata:
   name: keycloak-data
   namespace: keycloak
 spec:
-  storageClassName: microk8s-hostpath
+  storageClassName: longhorn
   accessModes:
     - ReadWriteOnce
   resources:

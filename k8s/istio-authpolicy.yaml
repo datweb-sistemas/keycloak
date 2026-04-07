@@ -32,10 +32,12 @@ spec:
             # Adicione aqui os CIDRs corporativos autorizados a acessar o admin console.
             # Exemplos: "10.0.0.0/8", "192.168.1.0/24", "203.0.113.0/28"
             notIpBlocks:
-              - "CORPORATE_CIDR_1"   # TODO: substituir pelo CIDR corporativo real
-              - "CORPORATE_CIDR_2"   # TODO: adicionar CIDRs adicionais conforme necessário
+              - "10.14.56.0/24"    # Rede interna do cluster Kubernetes (nodes + pods)
+              - "10.128.48.0/22"   # Rede corporativa interna (workstations / VPN)
       to:
         - operation:
+            ports:
+              - "8080"
             paths:
               - "/auth/admin/*"
               - "/admin/*"
