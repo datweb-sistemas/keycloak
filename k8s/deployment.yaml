@@ -30,6 +30,8 @@ spec:
         - name: keycloak
           image: ghcr.io/datweb-sistemas/keycloak:latest
           imagePullPolicy: Always
+          # Keycloak 17+ requer o subcomando "start" para iniciar em modo produção.
+          args: ["start"]
           ports:
             - name: http
               containerPort: 8080
@@ -46,20 +48,31 @@ spec:
             limits:
               cpu: "2"
               memory: 2Gi
+          # startupProbe garante que o Keycloak (startup lento ~60-120s) tenha
+          # tempo suficiente para iniciar antes que liveness/readiness entrem em ação.
+          # Janela máxima: periodSeconds(10) * failureThreshold(30) = 300s
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
           livenessProbe:
             httpGet:
               path: /health/live
               port: 8080
-            initialDelaySeconds: 60
             periodSeconds: 30
             failureThreshold: 3
+            timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /health/ready
               port: 8080
-            initialDelaySeconds: 30
             periodSeconds: 10
             failureThreshold: 3
+            timeoutSeconds: 5
           volumeMounts:
             - name: keycloak-data
               mountPath: /opt/keycloak/data

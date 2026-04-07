@@ -5,13 +5,17 @@ metadata:
   namespace: keycloak
 data:
   KC_DB: postgres
-  KC_PROXY: edge
+  # KC_PROXY=edge foi removido no Keycloak 24+. Usar KC_PROXY_HEADERS para indicar
+  # que o proxy encaminha os headers X-Forwarded-* (modo edge/reverse proxy).
+  KC_PROXY_HEADERS: xforwarded
   KC_HOSTNAME: auth.datweb.com.br
-  KC_HOSTNAME_URL: https://auth.datweb.com.br
+  KC_HOSTNAME_STRICT: "true"
   KC_HTTP_ENABLED: "true"
   KC_HEALTH_ENABLED: "true"
   KC_METRICS_ENABLED: "true"
   KC_LOG_LEVEL: INFO
-  DB_ADDR: postgres-service.keycloak.svc.cluster.local
-  DB_PORT: "5432"
-  DB_DATABASE: keycloak
+  # Keycloak 17+ usa KC_DB_URL_HOST / KC_DB_URL_DATABASE / KC_DB_URL_PORT
+  # em vez das variáveis legadas DB_ADDR / DB_DATABASE / DB_PORT.
+  KC_DB_URL_HOST: postgres-service.keycloak.svc.cluster.local
+  KC_DB_URL_PORT: "5432"
+  KC_DB_URL_DATABASE: keycloak

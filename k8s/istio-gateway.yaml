@@ -13,6 +13,7 @@ spec:
         protocol: HTTPS
       tls:
         mode: SIMPLE
+        # credentialName deve bater com o secretName do Certificate (certificate.yaml)
         credentialName: keycloak-tls-secret
       hosts:
         - auth.datweb.com.br
@@ -20,6 +21,10 @@ spec:
         number: 80
         name: http
         protocol: HTTP
+      # httpsRedirect instrui o Istio a emitir redirect 301 para HTTPS no nível do Gateway,
+      # dispensando a necessidade de uma regra separada no VirtualService.
+      tls:
+        httpsRedirect: true
       hosts:
         - auth.datweb.com.br
 ---
@@ -34,14 +39,9 @@ spec:
   gateways:
     - keycloak-gateway
   http:
-    - match:
-        - port: 80
-      redirect:
-        scheme: https
-        redirectCode: 301
-    - match:
-        - port: 443
-      route:
+    # Rota única para HTTPS: encaminha para o Service keycloak na porta 80
+    # (Service.spec.ports[].port=80 -> targetPort=8080 no Pod).
+    - route:
         - destination:
             host: keycloak
             port:

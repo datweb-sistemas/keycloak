@@ -65,7 +65,36 @@ jobs:
           echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
+      - name: Apply Kubernetes manifests
+        run: |
+          # 1. Namespace primeiro — tudo o mais depende dele
+          kubectl apply -f k8s/namespace.yaml
+          kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/keycloak --timeout=30s
+
+          # 2. ConfigMap e Secret antes do Deployment (envFrom referencia ambos)
+          kubectl apply -f k8s/configmap.yaml
+          kubectl apply -f k8s/secret.yaml
+
+          # 3. PVC antes do Deployment (volume montado em /opt/keycloak/data)
+          kubectl apply -f k8s/pvc.yaml
+
+          # 4. Service antes do Deployment (VirtualService aponta para ele)
+          kubectl apply -f k8s/service.yaml
+
+          # 5. Istio Gateway + VirtualService antes do Deployment
+          kubectl apply -f k8s/istio-gateway.yaml
+
+          # 6. Istio AuthorizationPolicy
+          kubectl apply -f k8s/istio-authpolicy.yaml
+
+          # 7. cert-manager Certificate (solicita o TLS secret referenciado pelo Gateway)
+          kubectl apply -f k8s/certificate.yaml
+
+          # 8. Deployment por último — depende de ConfigMap, Secret, PVC e Service
+          kubectl apply -f k8s/deployment.yaml
+
       - name: Create GHCR image pull secret in cluster
+        # Executado após o namespace existir para evitar erro "namespace not found"
         run: |
           kubectl create secret docker-registry ghcr-secret \
             --docker-server=ghcr.io \
@@ -74,24 +103,6 @@ jobs:
             --docker-email=devops@datweb.com.br \
             --namespace=keycloak \
             --dry-run=client -o yaml | kubectl apply -f -
-
-      - name: Apply Kubernetes manifests
-        run: |
-          # Aplicar namespace primeiro para garantir que ele exista
-          kubectl apply -f k8s/namespace.yaml
-
-          # Aguardar o namespace estar pronto
-          kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/keycloak --timeout=30s
-
-          # Aplicar os demais manifests
-          kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/secret.yaml
-          kubectl apply -f k8s/pvc.yaml
-          kubectl apply -f k8s/certificate.yaml
-          kubectl apply -f k8s/istio-gateway.yaml
-          kubectl apply -f k8s/istio-authpolicy.yaml
-          kubectl apply -f k8s/service.yaml
-          kubectl apply -f k8s/deployment.yaml
 
       - name: Update deployment image
         run: |
