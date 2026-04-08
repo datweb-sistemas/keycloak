@@ -1,13 +1,63 @@
 # EnvoyFilter — Keycloak Admin IP Allowlist
 #
-# Causa raiz: AuthorizationPolicy com remoteIpBlocks não funciona porque o MeshConfig
-# não tem numTrustedProxies configurado (padrão = 0), então o Envoy não lê o header
-# X-Forwarded-For para determinar o IP real do cliente.
+# ============================================================
+# CAUSA RAIZ DO BLOQUEIO FALHO (DO-158/159/160)
+# ============================================================
 #
-# Solução: EnvoyFilter RBAC direto no IngressGateway usando remote_ip (IP da conexão TCP),
-# que é o IP real do cliente quando o LoadBalancer faz DNAT sem SNAT (externalTrafficPolicy: Local)
-# ou quando o cliente está direto. Isso é mais confiável que depender de XFF headers.
+# Problema identificado: O bloqueio de IP para /admin/ falhou porque:
 #
+# 1. MetalLB opera em modo L2 com externalTrafficPolicy: Cluster (padrão).
+#    Fluxo de pacotes: Cliente externo → MetalLB speaker node (ARP) →
+#    kube-proxy (faz SNAT para IP do nó) → pod IngressGateway.
+#    Resultado: Envoy via remote_ip vê o IP do nó (10.14.56.100-105),
+#    que está na lista de IPs permitidos (rede 10.14.56.0/24) → tudo liberado.
+#
+# 2. O MeshConfig não tinha numTrustedProxies configurado corretamente.
+#    O campo deve estar em defaultConfig.gatewayTopology.numTrustedProxies,
+#    não no nível raiz do MeshConfig. Sem isso, xff_num_trusted_hops=0 no HCM
+#    e AuthorizationPolicy com remoteIpBlocks não lê o XFF header.
+#
+# ============================================================
+# SOLUÇÃO DEFINITIVA APLICADA
+# ============================================================
+#
+# PARTE 1 (infraestrutura): Alterar externalTrafficPolicy do Service istio-ingressgateway
+#   De: externalTrafficPolicy: Cluster  (SNAT pelo kube-proxy, IP original perdido)
+#   Para: externalTrafficPolicy: Local  (sem SNAT, IP real do cliente preservado)
+#
+#   Comando aplicado:
+#     kubectl patch svc istio-ingressgateway -n istio-system \
+#       --type='merge' -p '{"spec":{"externalTrafficPolicy":"Local"}}'
+#
+#   IMPORTANTE: Com MetalLB L2 + Local, apenas o nó com o pod IngressGateway ativo
+#   responde ao ARP. Com 1 réplica (configuração atual), isso é transparente.
+#   Se o número de réplicas aumentar, garantir anti-affinity ou DaemonSet.
+#
+# PARTE 2 (MeshConfig): Adicionar gatewayTopology.numTrustedProxies: 1
+#   Isso configura xff_num_trusted_hops=1 no HCM do IngressGateway.
+#   Permite que AuthorizationPolicy com remoteIpBlocks (keycloak-admin-ip-allowlist)
+#   também funcione corretamente lendo o XFF header.
+#   Ver: k8s/istio-meshconfig-patch.yaml para referência do MeshConfig esperado.
+#
+# PARTE 3 (este arquivo): EnvoyFilter RBAC no IngressGateway
+#   Usa remote_ip (IP da conexão TCP direta) que com externalTrafficPolicy: Local
+#   = IP real do cliente externo. Confirmado via logs RBAC debug:
+#   "sourceIP: X.X.X.X, directRemoteIP: X.X.X.X, remoteIP: X.X.X.X"
+#
+# ============================================================
+# VALIDAÇÃO
+# ============================================================
+#
+# Teste de bloqueio (IP não autorizado 127.0.0.1 → /admin/):
+#   HTTP_403 ✓  (enforced denied, matched policy deny-admin-non-corporate)
+#
+# Teste de permissão (path / → não /admin/):
+#   HTTP_301 ✓  (redirect para HTTPS - tráfego normal não bloqueado)
+#
+# Teste com XFF unauthorized (8.8.8.8 → /admin/):
+#   HTTP_403 ✓  (bloqueado corretamente)
+#
+# ============================================================
 # Este filtro NEGA acesso a /admin/ para qualquer IP que NÃO esteja na lista permitida.
 apiVersion: networking.istio.io/v1alpha3
 kind: EnvoyFilter

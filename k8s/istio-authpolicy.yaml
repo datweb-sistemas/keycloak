@@ -1,22 +1,27 @@
 # Istio AuthorizationPolicy — Keycloak Admin Access Control
 #
-# Arquitetura de rede:
-#   Cliente externo → Firewall (SNAT) → IngressGateway (10.244.x.x) → Keycloak sidecar
+# Arquitetura de rede (após correção DO-158/159/160):
+#   Cliente externo → MetalLB L2 (sem SNAT) → IngressGateway pod → Keycloak sidecar
 #
-# O sidecar do Keycloak só vê o IP do pod IngressGateway (10.244.0.0/16) como source.ipBlocks.
-# Para filtrar IPs externos reais, usa-se source.remoteIpBlocks (X-Forwarded-For) no IngressGateway.
+# Com externalTrafficPolicy: Local no Service istio-ingressgateway, o MetalLB
+# não faz SNAT e o IP real do cliente chega diretamente ao pod IngressGateway.
 #
-# NOTA (DO-158): A policy keycloak-admin-ip-allowlist (abaixo) com remoteIpBlocks NÃO estava
-# sendo enforced porque o MeshConfig não tem numTrustedProxies configurado (padrão = 0).
-# Sem numTrustedProxies >= 1, o Envoy não lê o header X-Forwarded-For para source.remoteIpBlocks,
-# tornando a policy ineficaz para inspecionar o IP real do cliente externo.
+# LINHA DE DEFESA 1: EnvoyFilter RBAC (k8s/envoyfilter-admin-ip.yaml)
+#   Bloqueia /admin/ no IngressGateway usando remote_ip = IP real do cliente.
+#   Testado e confirmado bloqueando corretamente (HTTP 403).
 #
-# CORREÇÃO: ver k8s/envoyfilter-admin-ip.yaml — EnvoyFilter RBAC direto no IngressGateway
-# usando remote_ip (IP da conexão TCP real), que é imune a manipulação de headers XFF.
+# LINHA DE DEFESA 2: AuthorizationPolicy keycloak-admin-ip-allowlist (abaixo)
+#   Usa remoteIpBlocks (lê X-Forwarded-For) com numTrustedProxies=1 configurado
+#   em defaultConfig.gatewayTopology.numTrustedProxies no MeshConfig.
+#   Ver k8s/istio-meshconfig-patch.yaml para referência do MeshConfig esperado.
 #
-# Duas policies são necessárias:
-#   1. keycloak-admin-ip-allowlist (istio-system) — INEFICAZ sem numTrustedProxies; substituída pelo EnvoyFilter
-#   2. keycloak-admin-deny-non-corporate (keycloak)  — mantém restrição de rede interna no sidecar
+# LINHA DE DEFESA 3: AuthorizationPolicy keycloak-admin-deny-non-corporate
+#   Aplicada no sidecar do Keycloak. Vê apenas IPs de pod (10.244.0.0/16),
+#   protege contra tráfego lateral interno não autorizado.
+#
+# HISTÓRICO: Antes da correção (DO-158), o MetalLB L2 com externalTrafficPolicy:Cluster
+# fazia SNAT para IP do nó (10.14.56.x), que estava na lista de IPs permitidos.
+# Resultado: todos IPs externos eram vistos como 10.14.56.x → bloqueio ineficaz.
 
 ---
 # Policy 1: Aplicada no IngressGateway (namespace istio-system)
