@@ -1,62 +1,89 @@
-name: Deploy Keycloak to Kubernetes
+# ──────────────────────────────────────────────────────────────
+# Deploy Keycloak → Produção (auth.alfa.promobank.online) — MANUAL
+#
+# Acionamento: workflow_dispatch (manual via GitHub Actions UI)
+#   Pode ser disparado de qualquer branch.
+#
+# Fluxo:
+#   dispatch → build imagem (GHCR) → apply k8s/alfa/ → rollout
+#
+# Secrets obrigatórios:
+#   GHCR_TOKEN      — GitHub PAT com packages:write para push no GHCR
+#   KUBECONFIG_DATA — kubeconfig do cluster de produção (base64)
+#
+# Namespace k8s: keycloak
+# Domínio: https://auth.alfa.promobank.online
+# ──────────────────────────────────────────────────────────────
+name: Deploy Keycloak → Produção (manual)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'k8s/**'
-      - 'themes/**'
-      - 'Dockerfile'
 
 env:
-  IMAGE: ghcr.io/datweb-sistemas/keycloak:latest
+  IMAGE: ghcr.io/datweb-sistemas/keycloak
+
+concurrency:
+  group: deploy-keycloak-prod
+  cancel-in-progress: false
 
 jobs:
+  # ════════════════════════════════════════════════════════════
+  # BUILD — imagem Keycloak customizada (tema PromoBank)
+  # ════════════════════════════════════════════════════════════
   build:
-    name: Build and Push Docker Image
+    name: Build and Push Image
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
+    outputs:
+      short-sha: ${{ steps.meta.outputs.short-sha }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Log in to GitHub Container Registry
+      - name: Compute short SHA
+        id: meta
+        run: echo "short-sha=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+      - name: Build and push
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
-          tags: ${{ env.IMAGE }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: |
+            ${{ env.IMAGE }}:prod
+            ${{ env.IMAGE }}:prod-${{ steps.meta.outputs.short-sha }}
+          cache-from: type=gha,scope=keycloak-prod
+          cache-to: type=gha,mode=max,scope=keycloak-prod
 
+  # ════════════════════════════════════════════════════════════
+  # DEPLOY — apply k8s/alfa/ no cluster de produção
+  # Kubeconfig via secret KUBECONFIG_DATA (base64)
+  # ════════════════════════════════════════════════════════════
   deploy:
     name: Deploy to Kubernetes
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: build
     permissions:
       contents: read
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup kubectl
-        uses: azure/setup-kubectl@v3
+        uses: azure/setup-kubectl@v4
         with:
           version: 'latest'
 
@@ -66,51 +93,111 @@ jobs:
           echo "${{ secrets.KUBECONFIG_DATA }}" | base64 -d > $HOME/.kube/config
           chmod 600 $HOME/.kube/config
 
-      - name: Apply Kubernetes manifests
-        run: |
-          # 1. Namespace primeiro — tudo o mais depende dele
-          kubectl apply -f k8s/namespace.yaml
-          kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/keycloak --timeout=30s
-
-          # 2. ConfigMap e Secret antes do Deployment (envFrom referencia ambos)
-          kubectl apply -f k8s/configmap.yaml
-          kubectl apply -f k8s/secret.yaml
-
-          # 3. PVC antes do Deployment (volume montado em /opt/keycloak/data)
-          kubectl apply -f k8s/pvc.yaml
-
-          # 4. Service antes do Deployment (VirtualService aponta para ele)
-          kubectl apply -f k8s/service.yaml
-
-          # 5. Istio Gateway + VirtualService antes do Deployment
-          kubectl apply -f k8s/istio-gateway.yaml
-
-          # 6. Istio AuthorizationPolicy
-          kubectl apply -f k8s/istio-authpolicy.yaml
-
-          # 7. cert-manager Certificate (solicita o TLS secret referenciado pelo Gateway)
-          kubectl apply -f k8s/certificate.yaml
-
-          # 8. Deployment por último — depende de ConfigMap, Secret, PVC e Service
-          kubectl apply -f k8s/deployment.yaml
-
-      - name: Create GHCR image pull secret in cluster
-        # Executado após o namespace existir para evitar erro "namespace not found"
+      - name: Upsert GHCR pull secret
         run: |
           kubectl create secret docker-registry ghcr-secret \
             --docker-server=ghcr.io \
             --docker-username=${{ github.actor }} \
             --docker-password=${{ secrets.GHCR_TOKEN }} \
             --docker-email=devops@datweb.com.br \
-            --namespace=keycloak \
+            -n keycloak \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Update deployment image
+      - name: Apply k8s/alfa/ manifests
         run: |
+          # 1. Namespace
+          kubectl apply -f k8s/alfa/namespace.yaml
+
+          kubectl wait --for=jsonpath='{.status.phase}'=Active \
+            namespace/keycloak --timeout=30s
+
+          # 2. MeshConfig patch (numTrustedProxies — pré-requisito do EnvoyFilter)
+          kubectl apply -f k8s/alfa/meshconfig-patch.yaml
+
+          # 3. ConfigMap + Secret
+          kubectl apply -f k8s/alfa/configmap.yaml
+          kubectl apply -f k8s/alfa/secret.yaml
+
+          # 4. PVC + PostgreSQL
+          kubectl apply -f k8s/alfa/pvc.yaml
+          kubectl apply -f k8s/alfa/postgres.yaml
+
+          kubectl wait --for=condition=ready pod \
+            -l app.kubernetes.io/name=keycloak-postgres \
+            -n keycloak --timeout=120s
+
+          # 5. Service
+          kubectl apply -f k8s/alfa/service.yaml
+
+          # 6. Deployment
+          kubectl apply -f k8s/alfa/deployment.yaml
+
+          # 7. Rede Istio — certificate deve vir antes do gateway (credentialName)
+          kubectl apply -f k8s/alfa/certificate.yaml
+          kubectl apply -f k8s/alfa/gateway.yaml
+
+          # 8. Segurança — EnvoyFilter e AuthorizationPolicy
+          kubectl apply -f k8s/alfa/envoyfilter-admin-ip.yaml
+          kubectl apply -f k8s/alfa/authpolicy.yaml
+
+      - name: Update image
+        run: |
+          SHORT="${{ needs.build.outputs.short-sha }}"
           kubectl set image deployment/keycloak \
-            keycloak=${{ env.IMAGE }} \
+            keycloak=${{ env.IMAGE }}:prod-${SHORT} \
             -n keycloak
 
       - name: Wait for rollout
+        id: rollout
         run: |
           kubectl rollout status deployment/keycloak -n keycloak --timeout=300s
+
+      - name: Diagnose on failure
+        if: failure() && steps.rollout.conclusion == 'failure'
+        run: |
+          kubectl get pods -n keycloak -o wide
+          kubectl get events -n keycloak --sort-by='.lastTimestamp' | tail -20
+          POD=$(kubectl get pod -n keycloak -l app.kubernetes.io/name=keycloak --no-headers -o name | head -1)
+          if [ -n "$POD" ]; then
+            kubectl describe $POD -n keycloak | tail -30
+            kubectl logs $POD -n keycloak --tail=50 2>/dev/null || true
+          fi
+
+      - name: Rollback on failure
+        if: failure() && steps.rollout.conclusion == 'failure'
+        run: |
+          echo "Deploy falhou — revertendo..."
+          kubectl rollout undo deployment/keycloak -n keycloak
+          kubectl rollout status deployment/keycloak -n keycloak --timeout=300s
+
+      - name: Smoke test
+        run: |
+          echo "Aguardando estabilização (15s)..."
+          sleep 15
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+              --max-time 15 \
+              https://auth.alfa.promobank.online/health/ready 2>/dev/null || echo "000")
+            echo "Tentativa ${i}: HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Keycloak OK"
+              break
+            fi
+            if [ "$i" = "5" ]; then
+              echo "Smoke test falhou após 5 tentativas"
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          SHORT="${{ needs.build.outputs.short-sha }}"
+          echo "## Deploy Keycloak → Produção" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Imagem | \`${{ env.IMAGE }}:prod-${SHORT}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${SHORT}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| URL | https://auth.alfa.promobank.online |" >> $GITHUB_STEP_SUMMARY
