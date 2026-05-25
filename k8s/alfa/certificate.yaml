@@ -1,0 +1,40 @@
+# Certificate TLS — auth.alfa.promobank.online
+#
+# CORREÇÃO DEFINITIVA em relação ao ambiente datwebsistemas (k8s/certificate.yaml):
+#   O Certificate ANTERIOR estava no namespace keycloak (onde o cert-manager emitia
+#   o secret). O Istio IngressGateway, porém, busca o secret de TLS no namespace
+#   istio-system (onde o pod do IngressGateway roda). Isso obrigava a copiar
+#   manualmente o secret de keycloak → istio-system após cada renovação.
+#
+#   SOLUÇÃO: declarar o Certificate diretamente no namespace istio-system.
+#   O cert-manager emite o secret já em istio-system, onde o Istio Gateway pode
+#   lê-lo nativamente via credentialName — sem cópia manual, sem job de sincronização.
+#
+# PRÉ-REQUISITO:
+#   O ClusterIssuer letsencrypt-prod deve estar configurado e funcional no cluster.
+#   Verificar: kubectl get clusterissuer letsencrypt-prod
+#
+# DNS:
+#   O A record auth.alfa.promobank.online → 70.38.2.213 deve estar propagado
+#   antes do cert-manager iniciar o desafio HTTP-01.
+#   Verificar: dig +short auth.alfa.promobank.online
+#
+# Acompanhar emissão:
+#   kubectl describe certificate keycloak-alfa-tls -n istio-system
+#   kubectl describe certificaterequest -n istio-system
+#   kubectl describe challenge -n istio-system
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: keycloak-alfa-tls
+  # CRÍTICO: namespace istio-system (não keycloak).
+  # O Istio IngressGateway lê credentialName deste namespace.
+  # Colocar o Certificate aqui elimina a necessidade de copiar o secret manualmente.
+  namespace: istio-system
+spec:
+  secretName: keycloak-alfa-tls
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+  dnsNames:
+    - auth.alfa.promobank.online

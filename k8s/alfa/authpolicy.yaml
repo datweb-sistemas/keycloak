@@ -1,0 +1,111 @@
+# Istio AuthorizationPolicy — Keycloak Admin Access Control (ambiente alfa)
+#
+# Arquitetura de rede (após correção DO-158/159/160):
+#   Cliente externo → MetalLB L2 (sem SNAT) → IngressGateway pod → Keycloak sidecar
+#
+# Com externalTrafficPolicy: Local no Service istio-ingressgateway, o MetalLB
+# não faz SNAT e o IP real do cliente chega diretamente ao pod IngressGateway.
+#
+# LINHA DE DEFESA 1: EnvoyFilter RBAC (k8s/alfa/envoyfilter-admin-ip.yaml)
+#   Bloqueia /admin/ no IngressGateway usando remote_ip = IP real do cliente.
+#   Testado e confirmado bloqueando corretamente (HTTP 403).
+#
+# LINHA DE DEFESA 2: AuthorizationPolicy keycloak-admin-ip-allowlist (abaixo)
+#   Usa remoteIpBlocks (lê X-Forwarded-For) com numTrustedProxies=1 configurado
+#   em defaultConfig.gatewayTopology.numTrustedProxies no MeshConfig.
+#   Ver k8s/alfa/meshconfig-patch.yaml para referência do MeshConfig esperado.
+#
+# LINHA DE DEFESA 3: AuthorizationPolicy keycloak-admin-deny-non-corporate
+#   Aplicada no sidecar do Keycloak. Vê apenas IPs de pod (10.244.0.0/16),
+#   protege contra tráfego lateral interno não autorizado.
+#
+# HISTÓRICO: Antes da correção (DO-158), o MetalLB L2 com externalTrafficPolicy:Cluster
+# fazia SNAT para IP do nó (10.14.56.x), que estava na lista de IPs permitidos.
+# Resultado: todos IPs externos eram vistos como 10.14.56.x → bloqueio ineficaz.
+
+---
+# Policy 1: Aplicada no IngressGateway (namespace istio-system)
+# Nega acesso ao /admin/ para qualquer IP externo que NÃO esteja na lista MGMT-ALLOWED do firewall CA.
+# Usa remoteIpBlocks para inspecionar o header X-Forwarded-For e obter o IP real do cliente.
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: keycloak-admin-ip-allowlist
+  namespace: istio-system
+spec:
+  selector:
+    matchLabels:
+      app: istio-ingressgateway
+  action: DENY
+  rules:
+    - from:
+        - source:
+            # notRemoteIpBlocks: inspeciona X-Forwarded-For para obter o IP real do cliente.
+            # "Negar se o IP real do cliente NÃO estiver nesta lista."
+            notRemoteIpBlocks:
+              # Redes internas
+              - "10.14.56.0/24"       # LAN interna do cluster
+              - "10.244.0.0/16"       # Pod CIDR do cluster (IngressGateway e outros pods)
+              - "10.128.0.0/16"       # Rede corporativa interna
+              - "10.128.48.0/22"      # Corporate workstations / VPN
+              - "172.31.100.0/24"     # Rede interna adicional
+              - "10.192.0.0/16"       # Rede interna adicional
+              - "172.18.10.0/24"      # Rede interna adicional
+              # IPs externos autorizados — address-set MGMT-ALLOWED do firewall Juniper SRX CA
+              - "191.33.183.251/32"   # MGMT-CLIENT2 / DATWEB-VIVO
+              - "45.189.41.96/32"     # MGMT-CLIENT3 / DATWEB-ULTRA
+              - "187.123.25.199/32"   # MGMT-CLIENT4 / DATWEB-CLARO
+              - "70.38.60.69/32"      # MGMT-CLIENT5 - Leaseweb MTL
+              - "138.99.19.108/32"    # MGMT-CLIENT6
+              - "181.191.209.180/32"  # MGMT-CLIENT7
+              - "45.174.195.132/32"   # MGMT-CLIENT8
+              - "72.55.168.13/32"     # MGMT-CLIENT9/10
+              - "181.191.209.181/32"  # MGMT-CLIENT11
+              - "181.191.209.182/32"  # MGMT-CLIENT12
+              - "181.191.209.179/32"  # MGMT-CLIENT13
+              - "201.42.19.52/32"     # DATWEB SP-VIVO
+              - "186.192.131.216/32"  # DATWEB SP-DURAND
+      to:
+        - operation:
+            hosts:
+              - "auth.alfa.promobank.online"
+            paths:
+              - "/admin/*"
+              - "/auth/admin/*"
+            ports:
+              - "80"
+              - "443"
+
+---
+# Policy 2: Aplicada no sidecar do Keycloak (namespace keycloak)
+# Nega acesso ao /admin/ para qualquer source.ipBlocks que NÃO seja rede interna conhecida.
+# Garante que mesmo tráfego lateral interno não autorizado seja bloqueado.
+# notIpBlocks: "negar se o IP de origem NÃO estiver nesta lista".
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: keycloak-admin-deny-non-corporate
+  namespace: keycloak
+spec:
+  selector:
+    matchLabels:
+      app: keycloak
+  action: DENY
+  rules:
+    - from:
+        - source:
+            notIpBlocks:
+              - "10.14.56.0/24"     # LAN interna do cluster
+              - "10.244.0.0/16"     # Pod CIDR do cluster (IngressGateway e outros pods)
+              - "10.128.0.0/16"     # Rede corporativa interna
+              - "10.128.48.0/22"    # Corporate workstations / VPN
+              - "172.31.100.0/24"   # Rede interna adicional
+              - "10.192.0.0/16"     # Rede interna adicional
+              - "172.18.10.0/24"    # Rede interna adicional
+      to:
+        - operation:
+            ports:
+              - "8080"
+            paths:
+              - "/auth/admin/*"
+              - "/admin/*"

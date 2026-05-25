@@ -1,0 +1,53 @@
+# Kustomization — Keycloak ambiente alfa (auth.alfa.promobank.online)
+#
+# Ordem de apply respeita dependências:
+#   1. namespace           — base de tudo
+#   2. configmap           — configuração do Keycloak
+#   3. secret              — credenciais (preencher antes do deploy)
+#   4. pvc                 — volumes persistentes para Postgres e Keycloak
+#   5. postgres            — banco de dados (PVC + StatefulSet + Service)
+#   6. deployment          — pod do Keycloak
+#   7. service             — ClusterIP para o Keycloak
+#   8. certificate         — Certificate no namespace istio-system (cert-manager + Let's Encrypt)
+#   9. gateway             — Istio Gateway + VirtualService
+#  10. envoyfilter-admin-ip — EnvoyFilter RBAC no IngressGateway (proteção /admin/)
+#  11. authpolicy          — AuthorizationPolicies (IngressGateway + sidecar Keycloak)
+#  12. meshconfig-patch    — referência do MeshConfig esperado (documentação)
+#
+# NOTA SOBRE certificate.yaml:
+#   O Certificate tem namespace: istio-system explícito no próprio arquivo.
+#   NÃO usar namespace override do kustomize para esse recurso — o namespace
+#   correto já está declarado diretamente no manifest.
+#
+# Para aplicar tudo de uma vez:
+#   kubectl apply -k k8s/alfa/
+#
+# Para aplicar individualmente (ordem recomendada):
+#   kubectl apply -f k8s/alfa/namespace.yaml
+#   kubectl apply -f k8s/alfa/configmap.yaml
+#   kubectl apply -f k8s/alfa/secret.yaml
+#   kubectl apply -f k8s/alfa/pvc.yaml
+#   kubectl apply -f k8s/alfa/postgres.yaml
+#   kubectl apply -f k8s/alfa/deployment.yaml
+#   kubectl apply -f k8s/alfa/service.yaml
+#   kubectl apply -f k8s/alfa/certificate.yaml
+#   kubectl apply -f k8s/alfa/gateway.yaml
+#   kubectl apply -f k8s/alfa/envoyfilter-admin-ip.yaml
+#   kubectl apply -f k8s/alfa/authpolicy.yaml
+#   kubectl apply -f k8s/alfa/meshconfig-patch.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - pvc.yaml
+  - postgres.yaml
+  - deployment.yaml
+  - service.yaml
+  - certificate.yaml      # namespace: istio-system definido no próprio arquivo — sem override aqui
+  - gateway.yaml
+  - envoyfilter-admin-ip.yaml
+  - authpolicy.yaml
+  - meshconfig-patch.yaml

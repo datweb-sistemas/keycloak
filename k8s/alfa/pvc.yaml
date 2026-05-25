@@ -1,0 +1,46 @@
+# PersistentVolumeClaims — ambiente alfa (PromoBank)
+#
+# storageClassName: NÃO está hardcoded neste arquivo.
+# Antes do deploy, verifique qual storage class está disponível no cluster:
+#   kubectl get storageclass
+#
+# Opções comuns:
+#   - longhorn         (Longhorn — clusters on-premise com Longhorn instalado)
+#   - standard         (padrão em clusters GKE, EKS, etc.)
+#   - managed-premium  (Azure AKS com discos premium)
+#
+# Para definir a storageClassName, descomente e ajuste a linha correspondente
+# em cada PVC abaixo, ou omita para usar a storage class padrão do cluster.
+#
+# Exemplo:
+#   storageClassName: longhorn
+
+---
+# Volume de dados do Keycloak (temas, sessões, caches persistentes)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keycloak-data
+  namespace: keycloak
+spec:
+  # storageClassName: longhorn   # Descomente e ajuste conforme o cluster
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# Volume de dados do PostgreSQL
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: keycloak
+spec:
+  # storageClassName: longhorn   # Descomente e ajuste conforme o cluster
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

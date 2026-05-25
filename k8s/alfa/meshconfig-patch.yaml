@@ -1,0 +1,70 @@
+# Istio MeshConfig patch — numTrustedProxies para bloqueio de IP real do cliente
+# (ambiente alfa — referência idêntica ao k8s/istio-meshconfig-patch.yaml)
+#
+# CONTEXTO (DO-158/159/160):
+# O cluster usa MetalLB L2 mode com externalTrafficPolicy: Cluster (padrão).
+# Isso faz com que o kube-proxy realize SNAT ao rotear o tráfego externo para os pods
+# do IngressGateway. O Envoy via remote_ip passa a ver o IP do nó (10.14.56.x),
+# que está na lista de IPs permitidos — tornando o bloqueio ineficaz.
+#
+# SOLUÇÃO em duas partes (ambas necessárias):
+#   1. externalTrafficPolicy: Local no Service istio-ingressgateway
+#      -> MetalLB L2 anuncia o VIP apenas pelo nó que tem o pod ativo.
+#      -> kube-proxy NÃO faz SNAT; o IP real do cliente chega ao pod.
+#      -> remote_ip no Envoy = IP real do cliente externo.
+#
+#   2. gatewayTopology.numTrustedProxies: 1 no MeshConfig
+#      -> Configura xff_num_trusted_hops=1 no HCM do IngressGateway.
+#      -> Permite que AuthorizationPolicy com remoteIpBlocks leia o XFF corretamente.
+#      -> Também garante que "remoteIP" no RBAC reflect o IP do XFF quando há um
+#         proxy confiável na frente (ex: cloud LB externo no futuro).
+#
+# Como aplicar:
+#   # Parte 1: Service externalTrafficPolicy
+#   kubectl patch svc istio-ingressgateway -n istio-system \
+#     --type='merge' -p '{"spec":{"externalTrafficPolicy":"Local"}}'
+#
+#   # Parte 2: MeshConfig
+#   kubectl get configmap istio -n istio-system -o json | python3 -c "
+#   import sys, json
+#   cm = json.load(sys.stdin)
+#   cm['data']['mesh'] = open('$(pwd)/istio-meshconfig-patch.yaml').read().split('---MESH---')[1].strip()
+#   import subprocess
+#   import tempfile, os
+#   with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+#       json.dump(cm, f)
+#       fname = f.name
+#   subprocess.run(['kubectl', 'replace', '-f', fname])
+#   os.unlink(fname)
+#   " 2>/dev/null
+#
+# NOTA: Após ambas as mudanças, fazer rollout restart:
+#   kubectl rollout restart deployment/istiod -n istio-system
+#   kubectl rollout restart deployment/istio-ingressgateway -n istio-system
+#
+# O conteúdo abaixo é para referência/documentação do mesh config esperado.
+# O ConfigMap istio na namespace istio-system deve conter o campo 'mesh' com:
+#
+# ---MESH---
+# defaultConfig:
+#   tracing:
+#     sampling: 100.0
+#     zipkin:
+#       address: jaeger-collector.monitoring.svc.cluster.local:9411
+#   discoveryAddress: istiod.istio-system.svc:15012
+#   gatewayTopology:
+#     numTrustedProxies: 1
+# defaultProviders:
+#   metrics:
+#   - prometheus
+# enablePrometheusMerge: true
+# rootNamespace: istio-system
+# trustDomain: cluster.local
+# ---MESH---
+#
+# Para verificar se foi aplicado:
+#   kubectl get configmap istio -n istio-system -o jsonpath='{.data.mesh}' | grep -A2 gatewayTopology
+#   kubectl exec -n istio-system <ingress-pod> -- curl -s http://localhost:15000/config_dump | \
+#     python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('active_state',{}).get('listener',{}).get('name',''), f.get('typed_config',{}).get('xff_num_trusted_hops','not set')) for c in d['configs'] for l in c.get('dynamic_listeners',[]) if c.get('@type','').endswith('ListenersConfigDump') for fc in l.get('active_state',{}).get('listener',{}).get('filter_chains',[]) for f in fc.get('filters',[]) if 'http_filters' in f.get('typed_config',{})]"
+#
+# Resultado esperado: xff_num_trusted_hops: 1 em todos os listeners relevantes.

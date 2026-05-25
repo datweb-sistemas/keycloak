@@ -1,0 +1,110 @@
+# PostgreSQL — banco de dados do Keycloak (ambiente alfa)
+#
+# Diferenças em relação ao ambiente datwebsistemas (k8s/postgres.yaml):
+#   - Imagem atualizada: postgres:15-alpine → postgres:16-alpine
+#   - sidecar.istio.io/inject: "false" explícito (igual ao existente, mas documentado aqui)
+#     O Postgres não precisa de sidecar Istio — apenas o Keycloak precisa.
+#     Reduz overhead e evita conflitos de inicialização entre o sidecar e o banco.
+#
+# ATENÇÃO: Os secrets postgres-secrets DEVEM corresponder aos valores em secret.yaml
+# (KC_DB_USERNAME == POSTGRES_USER e KC_DB_PASSWORD == POSTGRES_PASSWORD).
+
+---
+# Secret do PostgreSQL
+# Os valores DEVEM ser idênticos aos de keycloak-secrets (KC_DB_USERNAME/KC_DB_PASSWORD).
+# echo -n 'seu-valor-aqui' | base64
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secrets
+  namespace: keycloak
+type: Opaque
+data:
+  # echo -n 'CHANGE_ME' | base64
+  POSTGRES_USER: Q0hBTkdFX01F
+  POSTGRES_PASSWORD: Q0hBTkdFX01F
+  # echo -n 'keycloak' | base64
+  POSTGRES_DB: a2V5Y2xvYWs=
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: keycloak
+  labels:
+    app: postgres
+spec:
+  serviceName: postgres-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+      annotations:
+        # Sidecar Istio desabilitado no Postgres:
+        # O banco de dados não precisa participar do service mesh.
+        # Habilitar o sidecar causaria problemas de ordering de inicialização
+        # e aumentaria o overhead sem benefício para comunicação interna no namespace.
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: postgres
+          # postgres:16-alpine — atualizado do 15 usado no ambiente datwebsistemas.
+          # Alpine mantém a imagem enxuta (~80MB vs ~360MB da imagem padrão).
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+              name: postgres
+          envFrom:
+            - secretRef:
+                name: postgres-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+              # subPath evita conflito com o diretório raiz do volume (lost+found etc.)
+              subPath: pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: keycloak
+  labels:
+    app: postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP

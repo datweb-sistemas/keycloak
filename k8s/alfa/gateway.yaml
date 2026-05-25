@@ -1,0 +1,86 @@
+# Istio Gateway + VirtualService — auth.alfa.promobank.online
+#
+# Arquitetura de tráfego:
+#   Internet → DNS auth.alfa.promobank.online → 70.38.2.213 (IP público)
+#   → NAT → 10.14.56.106 (Istio IngressGateway IP interno)
+#   → Gateway (porta 443 TLS SIMPLE) → VirtualService
+#   → Service keycloak.keycloak.svc.cluster.local:80
+#   → Pod Keycloak na porta 8080
+#
+# credentialName: keycloak-alfa-tls aponta para o secret gerado pelo Certificate
+# (k8s/alfa/certificate.yaml) que reside em istio-system — mesmo namespace do
+# IngressGateway, sem necessidade de cópia manual.
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: keycloak-gateway
+  namespace: keycloak
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    # Porta 443: HTTPS com TLS terminado no IngressGateway (modo SIMPLE).
+    - port:
+        number: 443
+        name: https
+        protocol: HTTPS
+      tls:
+        mode: SIMPLE
+        # credentialName bate com o secretName do Certificate em istio-system.
+        # O Istio IngressGateway busca o secret no namespace istio-system nativamente.
+        credentialName: keycloak-alfa-tls
+      hosts:
+        - auth.alfa.promobank.online
+    # Porta 80: HTTP sem TLS.
+    # Necessário para:
+    #   a) Redirect 301 HTTP → HTTPS para usuários que acessam via HTTP.
+    #   b) Desafio ACME HTTP-01 do cert-manager para renovação de certificado
+    #      (path /.well-known/acme-challenge — tratado no VirtualService abaixo).
+    - port:
+        number: 80
+        name: http
+        protocol: HTTP
+      hosts:
+        - auth.alfa.promobank.online
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: keycloak-vs
+  namespace: keycloak
+spec:
+  hosts:
+    - auth.alfa.promobank.online
+  gateways:
+    - keycloak-gateway
+  http:
+    # Regra 1: Desafio ACME HTTP-01 — NÃO redirecionar para HTTPS.
+    # O cert-manager cria um pod temporário que responde em /.well-known/acme-challenge/
+    # durante a renovação do certificado. Se esse path for redirecionado para HTTPS,
+    # a renovação falha porque o Let's Encrypt valida via HTTP na porta 80.
+    # Este match deve vir ANTES do redirect geral para HTTPS.
+    - match:
+        - port: 80
+          uri:
+            prefix: "/.well-known/acme-challenge"
+      route:
+        - destination:
+            host: keycloak.keycloak.svc.cluster.local
+            port:
+              number: 80
+    # Regra 2: Redirect 301 HTTP → HTTPS para todo o resto na porta 80.
+    - match:
+        - port: 80
+      redirect:
+        scheme: https
+        redirectCode: 301
+    # Regra 3: Tráfego HTTPS encaminhado para o Service keycloak.
+    # Service.spec.ports[].port=80 → targetPort=8080 no Pod.
+    - route:
+        - destination:
+            host: keycloak.keycloak.svc.cluster.local
+            port:
+              number: 80

@@ -1,0 +1,19 @@
+# Service do Keycloak — ambiente alfa (PromoBank)
+# ClusterIP expõe o Keycloak apenas internamente no cluster.
+# O tráfego externo chega via Istio Gateway → VirtualService → este Service (port 80 → pod 8080).
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app: keycloak
+spec:
+  type: ClusterIP
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP

@@ -1,0 +1,159 @@
+# Deployment do Keycloak — ambiente alfa (PromoBank)
+#
+# Diferenças em relação ao ambiente datwebsistemas (k8s/deployment.yaml):
+#   - imagePullPolicy: Always (garante pull da imagem mais recente em produção)
+#   - --optimized adicionado nos args (ver pré-requisito abaixo)
+#   - securityContext explícito no container keycloak (runAsNonRoot + runAsUser: 1000)
+#
+# PRÉ-REQUISITO PARA --optimized:
+#   A flag --optimized instrui o Keycloak a pular a fase de build/augmentation na
+#   inicialização, usando a configuração compilada na imagem. Isso reduz o tempo de
+#   startup de ~17s para ~3s. Para funcionar, a imagem Docker DEVE ter sido buildada
+#   com as mesmas flags de build-time que estão configuradas neste ambiente:
+#     KC_DB=postgres, KC_HEALTH_ENABLED=true, KC_METRICS_ENABLED=true,
+#     KC_PROXY_HEADERS=xforwarded, KC_HTTP_ENABLED=true
+#   Se a imagem foi buildada com flags diferentes, o Keycloak aborta na inicialização
+#   com erro de configuração incompatível. Nesse caso, remova --optimized dos args
+#   até que a imagem seja reconstruída corretamente.
+#   Exemplo de Dockerfile com --build-check:
+#     RUN /opt/keycloak/bin/kc.sh build \
+#       --db=postgres \
+#       --health-enabled=true \
+#       --metrics-enabled=true \
+#       --http-enabled=true
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: keycloak
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  # Recreate é necessário porque o PVC keycloak-data usa ReadWriteOnce (RWO),
+  # que não permite montagem simultânea em múltiplos pods/nós.
+  # Com RollingUpdate, o pod antigo não libera o PVC antes do novo tentar montar.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+      annotations:
+        # Sidecar Istio habilitado: o Keycloak participa do service mesh.
+        # Necessário para que as AuthorizationPolicies (authpolicy.yaml) funcionem.
+        sidecar.istio.io/inject: "true"
+    spec:
+      # Para criar o imagePullSecret para o GHCR, execute:
+      # kubectl create secret docker-registry ghcr-secret \
+      #   --docker-server=ghcr.io \
+      #   --docker-username=<seu-usuario-github> \
+      #   --docker-password=<seu-token-ghcr> \
+      #   --docker-email=<seu-email> \
+      #   -n keycloak
+      imagePullSecrets:
+        - name: ghcr-secret
+      # initContainer corrige ownership do volume antes do Keycloak subir.
+      # O PVC é criado com root:root (drwxr-xr-x), mas o processo roda como
+      # uid=1000 (keycloak). Sem isso, /opt/keycloak/data/tmp não pode ser
+      # criado e todos os requests de recursos estáticos retornam HTTP 500.
+      initContainers:
+        - name: fix-data-permissions
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 1000:0 /opt/keycloak/data && chmod -R 775 /opt/keycloak/data"]
+          volumeMounts:
+            - name: keycloak-data
+              mountPath: /opt/keycloak/data
+          securityContext:
+            # runAsUser: 0 necessário para o chown funcionar no initContainer.
+            # O container principal roda como uid=1000 (ver securityContext abaixo).
+            runAsUser: 0
+      containers:
+        - name: keycloak
+          image: ghcr.io/datweb-sistemas/keycloak:latest
+          # Always: garante que o cluster sempre tente pull da imagem mais recente.
+          # Necessário em produção para receber patches de segurança automaticamente.
+          imagePullPolicy: Always
+          # O ENTRYPOINT da imagem já executa "kc.sh start".
+          # --optimized: pula a fase de augmentation/build na inicialização.
+          # PRÉ-REQUISITO: imagem buildada com as mesmas flags de build-time.
+          # Ver comentário no topo deste arquivo para detalhes.
+          args:
+            - "--optimized"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            # Keycloak 26+ expõe /health e /metrics na porta de management (9000),
+            # separada da porta de aplicação (8080).
+            - name: management
+              containerPort: 9000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: keycloak-config
+            - secretRef:
+                name: keycloak-secrets
+          # Contexto de segurança do container Keycloak.
+          # runAsNonRoot garante que o container não rode como root (uid=0).
+          # runAsUser: 1000 / runAsGroup: 0 é o usuário padrão da imagem oficial do Keycloak.
+          # allowPrivilegeEscalation: false previne escalonamento de privilégio via setuid/setgid.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          # Keycloak 26+ expõe /health/* e /metrics na porta de management (9000).
+          # startupProbe: janela máxima = periodSeconds(10) * failureThreshold(60) = 600s (10 min)
+          # Garante tempo suficiente mesmo se o augmentation ocorrer (fallback sem --optimized).
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 9000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 60
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 9000
+            periodSeconds: 30
+            failureThreshold: 5
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 10
+          volumeMounts:
+            - name: keycloak-data
+              mountPath: /opt/keycloak/data
+            # TODO: O tema promobank deve ser montado neste path.
+            # Opções:
+            #   1. Build o tema na imagem Docker (recomendado para produção).
+            #   2. Criar um ConfigMap com os arquivos do tema e montar aqui.
+            #   3. Usar um initContainer para copiar o tema de um volume compartilhado.
+            # Descomente e ajuste conforme a abordagem escolhida:
+            # - name: promobank-theme
+            #   mountPath: /opt/keycloak/themes/promobank
+      volumes:
+        - name: keycloak-data
+          persistentVolumeClaim:
+            claimName: keycloak-data
+        # Descomente para montar o tema via volume (ajuste conforme abordagem acima):
+        # - name: promobank-theme
+        #   configMap:
+        #     name: promobank-theme-configmap

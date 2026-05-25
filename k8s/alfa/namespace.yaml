@@ -1,0 +1,8 @@
+# Namespace do Keycloak — ambiente alfa (PromoBank)
+# istio-injection: enabled habilita injeção automática de sidecar Envoy em todos os pods.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: keycloak
+  labels:
+    istio-injection: enabled

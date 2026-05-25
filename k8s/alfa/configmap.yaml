@@ -1,0 +1,25 @@
+# ConfigMap do Keycloak — ambiente alfa (PromoBank)
+# Diferenças em relação ao ambiente datwebsistemas.com.br (k8s/configmap.yaml):
+#   - KC_HOSTNAME: aponta para o domínio do ambiente alfa
+#   - KC_DB_URL_HOST: endereço interno do Postgres no mesmo namespace
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-config
+  namespace: keycloak
+data:
+  KC_DB: postgres
+  # KC_PROXY=edge foi removido no Keycloak 24+. Usar KC_PROXY_HEADERS para indicar
+  # que o proxy encaminha os headers X-Forwarded-* (modo edge/reverse proxy).
+  KC_PROXY_HEADERS: xforwarded
+  KC_HOSTNAME: auth.alfa.promobank.online
+  KC_HOSTNAME_STRICT: "true"
+  KC_HTTP_ENABLED: "true"
+  KC_HEALTH_ENABLED: "true"
+  KC_METRICS_ENABLED: "true"
+  KC_LOG_LEVEL: INFO
+  # Keycloak 17+ usa KC_DB_URL_HOST / KC_DB_URL_DATABASE / KC_DB_URL_PORT
+  # em vez das variáveis legadas DB_ADDR / DB_DATABASE / DB_PORT.
+  KC_DB_URL_HOST: postgres-service.keycloak.svc.cluster.local
+  KC_DB_URL_PORT: "5432"
+  KC_DB_URL_DATABASE: keycloak
